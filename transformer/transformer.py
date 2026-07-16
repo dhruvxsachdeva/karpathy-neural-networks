@@ -15,7 +15,6 @@ n_embd=32
 
 torch.manual_seed(1337)
 
-# wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('tiny_shakespeare.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -93,7 +92,7 @@ class MultiHeadAttention(nn.Module):
         self.proj= nn.Linear(num_heads*head_size, n_embd)
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(x) # linear transformation of outcome of the above line
+        out = self.proj(out) # linear transformation of outcome of the above line
         return out
 
 class FeedFoward(nn.Module):
@@ -122,11 +121,13 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size) # communication
         self.ffwd = FeedFoward(n_embd) # computation
+        self.ln1= nn.LayerNorm(n_embd) # same as batch norm instead of rows we now normalise colums
+        self.ln2= nn.LayerNorm(n_embd)
 
 
     def forward(self, x):
-        x = x + self.sa(x) # forking to do computatuion
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.ln1(x)) # forking to do computatuion
+        x = x + self.ffwd(self.ln2(x))
         return x
 
 
@@ -141,7 +142,8 @@ class BigramLanguageModel(nn.Module):
         self.blocks=nn.Sequential(
             Block(n_embd, n_head=4),
             Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4)
+            Block(n_embd, n_head=4),
+            nn.LayerNorm(n_embd)
         )
 
         # self.sa_heads=MultiHeadAttention(4,n_embd//4) # 4 heads of 8 dimensional self attention, it has to be integer division because nn.Linear requires out_features to be an integer, because tensor dimensions must be integers.
