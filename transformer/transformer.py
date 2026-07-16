@@ -3,16 +3,20 @@ import torch.nn as nn
 from torch.nn import functional as F
 # taken directly from lecture to understand something use jupyter notebook
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
+# decoder only transformer
+batch_size = 64 # how many independent sequences will we process in parallel?
+block_size = 256 # what is the maximum context length for predictions?
 max_iters = 5000 # increase iterations to make up for decrease in lr
-eval_interval = 300
-learning_rate = 1e-3 # decrease the learning rate because self attention can not take high lrs
+eval_interval = 500
+learning_rate = 3e-4 # decrease the learning rate because self attention can not take high lrs
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd=32
+n_embd=384
+n_head = 6 # every head is 384//6 = 64 dimensional
+n_layer = 6
+dropout = 0.2 # every forward, backward pass 20 % of values are disabled
 # ------------
-
+# can't run this on CPU but theoretically this should bring down loss to around 1.4 
 torch.manual_seed(1337)
 
 with open('tiny_shakespeare.txt', 'r', encoding='utf-8') as f:
@@ -66,6 +70,7 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size))) # buffer lower triangular matrix
 
+        self.dropout= nn.Dropout(dropout)
     
     def forward(self, x):
         # input of size (batch, time-step, channels)
@@ -78,6 +83,8 @@ class Head(nn.Module):
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
         # perform the weighted aggregation of the values
+
+        wei= self.dropout(wei)
         v = self.value(x) # (B,T,hs)
         out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
         return out
@@ -90,6 +97,7 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj= nn.Linear(num_heads*head_size, n_embd)
+        self.dropout=nn.Dropout(dropout)
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.proj(out) # linear transformation of outcome of the above line
@@ -105,7 +113,10 @@ class FeedFoward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4* n_embd),
             nn.ReLU(),
-            nn.Linear(4* n_embd, n_embd)
+            nn.Linear(4* n_embd, n_embd),
+            nn.Dropout(dropout), 
+            # read paper Dropout: A simple way to prevent NN from overfitting
+            # randomly prevent some nodes from communicating because the mask changed everytime its like training an ensemble of sub networks
         )
 
     def forward(self, x):
@@ -139,13 +150,8 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table=nn.Embedding(block_size,n_embd)# encoding postions of tokens
-        self.blocks=nn.Sequential(
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            nn.LayerNorm(n_embd)
-        )
-
+        self.blocks=nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f=nn.LayerNorm(n_embd)
         # self.sa_heads=MultiHeadAttention(4,n_embd//4) # 4 heads of 8 dimensional self attention, it has to be integer division because nn.Linear requires out_features to be an integer, because tensor dimensions must be integers.
         # self.ffwd= FeedFoward(n_embd)
         self.lm_head= nn.Linear(n_embd,vocab_size)
